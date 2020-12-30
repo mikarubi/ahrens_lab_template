@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+import os
+import sys
+import h5py
+import pickle
+import nibabel
+import numpy as np
+from skimage.external import tifffile
+from voluseg._tools.nii_image import nii_image
+try:
+    import PIL
+except:
+    pass
+
+if len(sys.argv) < 4:
+    sys.exit('Usage: warp_to_template [input-volume] [input-directory] [template-directory]')
+
+fullname_input = sys.argv[1]
+dir_input = sys.argv[2]
+dir_template = sys.argv[3]
+
+name_input, ext = fullname_input.split('.', 1)
+ext = '.' + ext
+
+with open(os.path.join(dir_input, 'parameters.pickle'), 'rb') as file_handle:
+    parameters = pickle.load(file_handle)
+
+# save image as a nifti file
+if not('.nii' in ext) or ('.nii.gz' in ext):
+    if ('.tif' in ext) or ('.tiff' in ext):
+        try:
+            volume_input = tifffile.imread(fullname_input)
+        except:
+            img = PIL.Image.open(fullname_input)
+            volume_input = []
+            for i in range(img.n_frames):
+                img.seek(i)
+                volume_input.append(np.array(img).T)
+            volume_input = np.array(volume_input)
+    elif ('.h5' in ext) or ('.hdf5' in ext):
+        with h5py.File(fullname_input, 'r') as file_handle:
+            volume_input = file_handle[list(file_handle.keys())[0]][()]
+
+    volume_input = np.transpose(volume_input)
+
+    nibabel.save(
+        nii_image(volume_input.astype('float32'), parameters['affine_mat']),
+        name_input+'.nii.gz'
+    )
+
+# warp image to template
+name = list(filter(None, dir_input.split('/')))[-1]
+affine = os.path.join(dir_template, name+'_0GenericAffine.mat')
+nonlin = os.path.join(dir_template, name+'_1Warp.nii.gz')
+in_tform = ' '.join([nonlin, affine])
+
+mov_data = name_input+'.nii.gz'
+fix_data = os.path.join(dir_template, 'average_intensity_template.nii.gz')
+out_data = os.path.join(dir_template, 'results', name+'_template.nii.gz')
+os.makedirs(os.path.join(dir_template, 'results'), exist_ok=True)
+
+antsTransformation_call = ' '.join([
+    'antsApplyTransforms',
+    '--dimensionality 3',
+    '--input', mov_data,
+    '--reference-image', fix_data,
+    '--output', out_data,
+    '--interpolation', 'linear',
+    '--transform', in_tform,
+    '--default-value', '0',
+    '--verbose 1'
+])
+
+os.system(antsTransformation_call)
+

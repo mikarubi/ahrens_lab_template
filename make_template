@@ -1,0 +1,156 @@
+#!/usr/bin/env python
+
+import os
+import sys
+import h5py
+import pickle
+import nibabel
+import numpy as np
+from past.builtins import execfile
+from subprocess import check_output
+execfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'template_auxiliaries.py'))
+
+if len(sys.argv) < 3:
+    sys.exit('Usage: make_template [input-file] [output-directory]')
+
+# inputs and outputs
+proc = sys.argv[1]
+with open(proc, 'r') as hl:
+  dirs_input = [di[:-1] for di in hl.readlines()]
+
+base = sys.argv[2]
+if not os.path.isdir(base):         check_output(['mkdir','-p',base])
+if len(os.listdir(base)):           print('Warning: %s is not empty'%base)
+
+def register(fi, typ='r'):
+    step = 0.1
+    mov_intn = '_'.join([base+fi,        'intensity',  'original.nii.gz'])
+    mov_mask = '_'.join([base+fi,        'mask',       'original.nii.gz'])
+    fix_intn = '_'.join([base+'average', 'intensity',  'template.nii.gz'])
+    fix_mask = '_'.join([base+'average', 'mask',       'template.nii.gz'])
+        
+    in_tform = '[%s,%s,1]'%(fix_intn, mov_intn)
+    ou_tform = base+fi+'_'
+    
+    int_params = lambda nlin: ' '.join([
+        '--metric MI[%s,%s,1,32,Regular,1]'%(fix_intn, mov_intn),
+        ('--metric MI[%s,%s,1,32,Regular,1]'%(fix_intn, mov_intn) if nlin else ''),
+        '--convergence 800x400x200x100',
+        '--shrink-factors 8x4x2x1',
+        '--smoothing-sigmas 4x2x1x0vox',
+        '--masks [%s,%s]'%(fix_mask, mov_mask),
+    ])
+    
+    antsRegistration_call = ' '.join([
+        '/groups/rubinov/home/rubinovm/bin/ants/bin/antsRegistration',
+        '--initial-moving-transform %s'%(in_tform),
+        '--output %s'%(ou_tform),
+        '--dimensionality 3',
+        '--verbose 1',
+        '--float 1',
+        ('--transform Rigid[%f] '%(step)   + int_params(0) if 'r' in typ else ''),
+        ('--transform Affine[%f] '%(step)  + int_params(0) if 'a' in typ else ''),
+        ('--transform SyN[%f,5,5] '%(step) + int_params(1) if 's' in typ else ''),
+    ])
+    
+    return(antsRegistration_call.split())
+
+
+def save_average_template(typ=1):
+    
+    # get most representative brain
+    dist = np.zeros((len(fils), len(fils)))
+    for i, fi in enumerate(fils):
+        full_file_i = '_'.join([base+fi,'intensity','template.nii.gz'])
+        data_i = nibabel.load(full_file_i).get_data()
+        for j, fj in enumerate(fils):
+            if j <= i:
+                continue
+            
+            full_file_j = '_'.join([base+fj,'intensity','template.nii.gz'])
+            data_j = nibabel.load(full_file_j).get_data()
+            
+            dist[i,j] = np.corrcoef(data_i.ravel(), data_j.ravel())[0,1]
+            
+    dist = dist + dist.T
+    fi = fils[np.argmax(np.nanmean(dist, 0))]
+    if typ:
+        for ei in ['intensity', 'mask']:
+            full_file = '_'.join([base+fi,ei,'template.nii.gz'])
+            data = nibabel.load(full_file).get_data()
+            save_nii(data, 'average', ei, 'template')
+    else:
+        for ei in ['intensity', 'mask']:
+            full_file = '_'.join([base+fi,ei,'original.nii.gz'])
+            vx, vy, vz = nibabel.load(full_file).shape
+            rz = np.diag(nibabel.load(full_file).affine)[2]
+            rzes.update({'average': rz})
+            print(vx, vy, vz, rx, ry, rz)
+            data = float(vi[ei]) + np.zeros((vx+20, vy+20, vz+20))
+            data[10:10+vx, 10:10+vy, 10:10+vz] = nibabel.load(full_file).get_data()
+            save_nii(data, 'average', ei, 'template')
+
+###
+
+fils, vals = [], []
+rx, ry, rzes = [], [], {}
+mx, my, mz = 0, 0, 0
+for di in dirs_input:
+    fi = list(filter(None, di.split('/')))[-1]
+    print(fi)
+    
+    with h5py.File(di+'/volume0.hdf5', 'r') as hl:
+        mask = hl['volume_mask'][()].T
+        data = hl['volume_mean'][()].T
+        data = np.minimum(data, np.percentile(data, 99.5))
+        
+    with open(di+'/parameters.pickle', 'rb') as hl:
+        params = pickle.load(hl)
+        rzes.update({fi: params['res_z']})
+        rxi, ryi = params['ds'] * np.r_[params['res_x'], params['res_y']]
+        if not rx and not ry:
+            rx, ry = rxi, ryi
+        else:
+            assert(rx == rxi and ry == ryi)
+    
+    fils.append(fi)
+    vals.append(np.percentile(data, 5))
+    
+    vx, vy, vz = data.shape
+    mx = np.maximum(mx, vx)
+    my = np.maximum(my, vy)
+    mz = np.maximum(mz, vz)
+    
+    # get image names and save as nifti files
+    save_nii(data, fi, 'intensity', 'original')
+    save_nii(mask, fi, 'mask', 'original')
+    
+# initialize parameters
+data = None
+ncor = '12'
+ei0, ei3 = 'intensity', 'mask'
+vi = {ei0: str(np.median(vals)), ei3: '0'}
+pi = {ei0: 'Linear', ei3: 'NearestNeighbor'}
+extn = ei0, ei3
+
+# get initial average template
+for fi in fils:
+    for ei in extn:
+        full_file = '_'.join([base+fi,ei,'original.nii.gz'])
+        data = float(vi[ei]) + np.zeros((mx, my, mz))
+        vx, vy, vz = nibabel.load(full_file).shape
+        ox, oy, oz = (mx - vx)//2, (my - vy)//2, (mz - vz)//2
+        data[ox:ox+vx, oy:oy+vy, oz:oz+vz] = nibabel.load(full_file).get_data()
+        save_nii(data, fi, ei, 'template')
+        data = None
+        
+# get iterative mutimodal template registration
+save_average_template(0)
+for typ in ['ras', 'ras', 'ras']:
+    print('Running \'%s\' registration.'%(typ))
+    deploy([register(fi, typ) for fi in fils], ncor)
+    for ei in extn:
+        deploy([warp(fi, ei, typ) for fi in fils])
+    save_average_template(1)
+
+print('Registration complete.')
