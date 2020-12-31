@@ -42,7 +42,7 @@ def register(fi, typ='r'):
     ])
     
     antsRegistration_call = ' '.join([
-        '/groups/rubinov/home/rubinovm/bin/ants/bin/antsRegistration',
+        '/groups/ahrens/home/ahrens_lab/ants/bin/bin/antsRegistration',
         '--initial-moving-transform %s'%(in_tform),
         '--output %s'%(ou_tform),
         '--dimensionality 3',

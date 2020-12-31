@@ -17,7 +17,7 @@ def warp(fi, ei, typ='r'):
     fix_data = '_'.join([base+'average','intensity','template.nii.gz'])            
             
     antsTransformation_call = ' '.join([
-        '/groups/rubinov/home/rubinovm/bin/ants/bin/antsApplyTransforms',
+        '/groups/ahrens/home/ahrens_lab/ants/bin/bin/antsApplyTransforms',
         '--dimensionality 3',
         '--input', mov_data,
         '--reference-image', fix_data,
