@@ -52,7 +52,7 @@ def deploy(cmds, ncor='1'):
     
     jobs_a = []
     for ci in cmds:
-        rcmd = ['bsub', '-o', base+'out/%f'%(time.time()), '-n', ncor] + ci
+        rcmd = ['bsub', '-o', os.path.join(base,'out','%f'%(time.time())), '-n', ncor] + ci
         jobs_a.append(check_output(rcmd).decode().split('>')[0].split('<')[1])
         print('Deployed job %s.'%(jobs_a[-1]))
         
